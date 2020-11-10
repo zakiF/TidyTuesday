@@ -1,0 +1,235 @@
+---
+title: "TidyTuesday"
+author: "Zaki"
+date: "10/11/2020"
+output: html_document
+---
+
+# 2020 Week 46
+
+
+## Pre-processing
+
+
+Load the data
+
+```{r}
+# Get the Data
+
+# Read in with tidytuesdayR package 
+# Install from CRAN via: install.packages("tidytuesdayR")
+# This loads the readme and all the datasets for the week of interest
+
+# Either ISO-8601 date or year/week works!
+
+#tuesdata <- tidytuesdayR::tt_load('2020-11-10')
+tuesdata <- tidytuesdayR::tt_load(2020, week = 46)
+
+raw_mobile <- tuesdata$mobile
+```
+
+
+
+
+## Load library
+
+```{r,warning=FALSE,message=FALSE}
+library(tidyverse)
+library(countrycode)
+library(janitor)
+```
+
+
+## Begin data exploration
+
+```{r}
+mobile_df <- tuesdata$mobile
+land_df <- tuesdata$landline
+
+# More data points in the landline dataset
+dim(mobile_df)
+dim(land_df)
+```
+
+
+Make a unique collumn to combine these two
+
+```{r}
+mobile_df <- mobile_df %>%
+  mutate(Uniq = paste(entity,year, sep="_")) 
+
+land_df_sub <- land_df %>%
+  mutate(Uniq = paste(entity,year, sep="_")) %>%
+  select(Uniq, landline_subs)
+
+# Combine
+df_comb <- mobile_df %>%
+  dplyr::left_join(land_df_sub) 
+  
+```
+
+Plot the number of landline subscription and mobile subscription across time
+
+```{r}
+# Number of landline across time
+ggplot(df_comb, aes(x=year, y =landline_subs)) +
+  geom_smooth() +
+  facet_wrap(~continent) +
+  scale_y_continuous(limits=c(0,100))
+
+# Number of mobile across time
+ggplot(df_comb, aes(x=year, y =mobile_subs)) +
+  geom_smooth() +
+  facet_wrap(~continent) +
+    scale_y_continuous(limits=c(0,100))
+```
+
+
+
+Plot the number of landline subscription and mobile subscription side by side
+
+```{r,eval=FALSE}
+# Calculate differences between the number of subscription per 100 people
+df_comb <- df_comb %>%
+  mutate(Diff = mobile_subs - landline_subs,
+         Categ = if_else(Diff < 0, "MoreLand", "MoreMobile"))
+
+
+ggplot(df_comb, aes(x=year, y =Diff, colour=Categ)) +
+  geom_smooth() +
+  facet_wrap(~continent) +
+    scale_y_continuous(limits=c(-100,100))
+```
+
+Convert data to long format using `pivot_longer`
+
+```{r}
+# Make either the landline or mobile negative
+df_comb2 <- df_comb %>%
+  mutate(landline_subs = landline_subs *-1)
+
+df_comb_long <- df_comb2 %>%
+  pivot_longer(c(mobile_subs,landline_subs),
+               names_to = "subscription", values_to = "count")
+  
+```
+
+
+
+Plot the number of landline subscription and mobile subscription side by side
+
+```{r}
+ggplot(df_comb_long, aes(x=year, y=count, fill=subscription)) +
+  geom_bar(stat="identity") +
+  #geom_smooth() +
+  facet_wrap(~continent) +
+    scale_y_continuous(limits=c(-100,100))
+
+# Plot above is not correct because it take the sum of all the continent
+
+```
+
+So we summarise the data. There are some NA, so we exclude these
+
+```{r}
+df_sum <- df_comb_long %>%
+  select(continent, subscription, count, year) %>%
+  na.omit() %>%
+  group_by(continent, subscription, year) %>%
+  summarize(MeanCount = mean(count))
+```
+
+Redo the plot above
+
+```{r}
+ggplot(df_sum, aes(x=year, y=MeanCount, fill=subscription)) +
+  geom_bar(stat="identity") +
+  #geom_smooth() +
+  facet_wrap(~continent) +
+    scale_y_continuous(limits=c(-150,150)) +
+  NULL
+```
+
+Highlight which year the number of mobile subscription exceedes landline
+
+```{r}
+df_comb3 <- df_comb %>%
+  # If the difference is <0 means more landline subscription
+  mutate(Diff = mobile_subs - landline_subs) %>%
+  select(continent, Diff, year) %>%
+  na.omit() %>%
+  group_by(continent, year) %>%
+  summarize(MeanDiff = mean(Diff)) %>%
+  # Select when there are more mobiles subscription (ie Diff >0)
+  filter(MeanDiff > 0) %>%
+  # Slect the first year this happens
+  summarize(MinYear = min(year))   %>%
+  mutate(subscription ="landline_subs")
+  
+```
+
+Repeat plot with the vertical line
+
+```{r}
+p <-
+  ggplot(df_sum, aes(x=year, y=MeanCount, fill=subscription)) +
+  geom_bar(stat="identity") +
+  #geom_smooth() +
+  facet_wrap(~continent) +
+    scale_y_continuous(limits=c(-150,150)) +
+  scale_fill_manual(values=c("#729ECE", "#ffb1b7")) +
+  #geom_vline(data= df_comb3, aes(xintercept=MinYear)) +
+  geom_segment(data= df_comb3, 
+               aes(x=MinYear+0.5,
+                   y=-100,
+                   xend=MinYear+0.5,
+                   yend=100),
+               linetype="dashed", colour="grey50") +
+  geom_text(data= df_comb3, aes(x=MinYear, y=120, label=MinYear)) +
+  NULL
+
+
+# Let's create an additional data frame to hold the text annotations:
+dat_text <- data.frame(
+  label = c("Mobile", "", "", "Mobile", ""),
+  continent   = unique(df_sum$continent),
+  subscription ="landline_subs"
+)
+
+# Let's create an additional data frame to hold the text annotations:
+dat_text2 <- data.frame(
+  label = c("Landline", "", "", "Landline", ""),
+  continent   = unique(df_sum$continent),
+  subscription ="landline_subs"
+)
+
+p2 <- 
+p + 
+  geom_text(
+  data    = dat_text,
+  mapping = aes(x = 1990, y = 80, label = label),
+  size=4, angle=90, colour="#ffb1b7") +
+  geom_text(
+  data    = dat_text2,
+  mapping = aes(x = 1990, y = -80, label = label),
+  size=4, angle=90, colour="#729ECE") +
+  theme_bw() +
+  scale_y_continuous(limits=c(-150,150),
+                     breaks = c(-100, 0, 100),
+                     label = c("100", "0", "100")) +
+  theme(legend.position = "none") +
+  labs(
+    title = "Adoption of fixed mobile or landline telephone across continent",
+    subtitle = "By 2001, mobile phone subscriptions overtakes landline subscriptions in most continents. \nVertical dashed line indicates the year mobile phone subscriptions overtakes landline subscriptions",
+    caption = "Source: Pew Research Smartphone Adoption | @zaki_wilmot") +
+  ylab("Fixed mobile /landline subscriptions (per 100 people)") +
+  NULL
+```
+
+Save plot
+
+```{r}
+ggsave("~/Desktop/plot.png", p2, width = 11, height = 7,dpi=1000)
+```
+
+
